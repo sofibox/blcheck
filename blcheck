@@ -25,296 +25,988 @@
 # =============================================================================
 #
 # title             : blcheck
-# description       : Test any domain against more then 100 black lists.
+# description       : Test any domain against more than 100 blocklists.
 # author            : Intellex
-# contributors      : Darko Poljak
-# date              : 2016-03-18
-# version           : 0.6.0
+# contributors      : Darko Poljak, Oliver Mueller, Andrej Walilko, Arafat Ali
+# date              : Jan 13 2022
+# version           : 0.7.9
 # usage             : blcheck [options] <domain_or_ip>
-#
-# =============================================================================
+# reference         : http://multirbl.valli.org/list/
+# code style        : https://google.github.io/styleguide/shell.xml
+# url               : github.com/sofibox/blcheck
+# comment           : This repo was based from the unmerge commits from @ogmueller #22 and @ch604 #24
+# ============================================================================
+
+SCRIPT_PATH="$(dirname "$(readlink -f "$0")")"
 
 # Config {
 
+_APP_VERSION="0.8.0"
 
-    # How many tries and for how long to wait for DNS queries
-    CONF_DNS_TRIES=2
-    CONF_DNS_DURATION=3
+# where to log blocklist hits permanently
+OUTPUT="${SCRIPT_PATH}/bl_output.txt"
 
-    # Blacklists to check
-    CONF_BLACKLISTS="
-        0spam-killlist.fusionzero.com
-        0spam.fusionzero.com
-        access.redhawk.org
-        all.rbl.jp
-        all.spam-rbl.fr
-        all.spamrats.com
-        aspews.ext.sorbs.net
-        b.barracudacentral.org
-        backscatter.spameatingmonkey.net
-        badnets.spameatingmonkey.net
-        bb.barracudacentral.org
-        bl.drmx.org
-        bl.konstant.no
-        bl.nszones.com
-        bl.spamcannibal.org
-        bl.spameatingmonkey.net
-        bl.spamstinks.com
-        black.junkemailfilter.com
-        blackholes.five-ten-sg.com
-        blacklist.sci.kun.nl
-        blacklist.woody.ch
-        bogons.cymru.com
-        bsb.empty.us
-        bsb.spamlookup.net
-        cart00ney.surriel.com
-        cbl.abuseat.org
-        cbl.anti-spam.org.cn
-        cblless.anti-spam.org.cn
-        cblplus.anti-spam.org.cn
-        cdl.anti-spam.org.cn
-        cidr.bl.mcafee.com
-        combined.rbl.msrbl.net
-        db.wpbl.info
-        dev.null.dk
-        dialups.visi.com
-        dnsbl-0.uceprotect.net
-        dnsbl-1.uceprotect.net
-        dnsbl-2.uceprotect.net
-        dnsbl-3.uceprotect.net
-        dnsbl.anticaptcha.net
-        dnsbl.aspnet.hu
-        dnsbl.inps.de
-        dnsbl.justspam.org
-        dnsbl.kempt.net
-        dnsbl.madavi.de
-        dnsbl.rizon.net
-        dnsbl.rv-soft.info
-        dnsbl.rymsho.ru
-        dnsbl.sorbs.net
-        dnsbl.zapbl.net
-        dnsrbl.swinog.ch
-        dul.pacifier.net
-        dyn.nszones.com
-        dyna.spamrats.com
-        fnrbl.fast.net
-        fresh.spameatingmonkey.net
-        hostkarma.junkemailfilter.com
-        images.rbl.msrbl.net
-        ips.backscatterer.org
-        ix.dnsbl.manitu.net
-        korea.services.net
-        l2.bbfh.ext.sorbs.net
-        l3.bbfh.ext.sorbs.net
-        l4.bbfh.ext.sorbs.net
-        list.bbfh.org
-        list.blogspambl.com
-        mail-abuse.blacklist.jippg.org
-        netbl.spameatingmonkey.net
-        netscan.rbl.blockedservers.com
-        no-more-funn.moensted.dk
-        noptr.spamrats.com
-        orvedb.aupads.org
-        pbl.spamhaus.org
-        phishing.rbl.msrbl.net
-        pofon.foobar.hu
-        psbl.surriel.com
-        rbl.abuse.ro
-        rbl.blockedservers.com
-        rbl.dns-servicios.com
-        rbl.efnet.org
-        rbl.efnetrbl.org
-        rbl.iprange.net
-        rbl.schulte.org
-        rbl.talkactive.net
-        rbl2.triumf.ca
-        rsbl.aupads.org
-        sbl-xbl.spamhaus.org
-        sbl.nszones.com
-        sbl.spamhaus.org
-        short.rbl.jp
-        spam.dnsbl.anonmails.de
-        spam.pedantic.org
-        spam.rbl.blockedservers.com
-        spam.rbl.msrbl.net
-        spam.spamrats.com
-        spamrbl.imp.ch
-        spamsources.fabel.dk
-        st.technovision.dk
-        tor.dan.me.uk
-        tor.dnsbl.sectoor.de
-        tor.efnet.org
-        torexit.dan.me.uk
-        truncate.gbudb.net
-        ubl.unsubscore.com
-        uribl.spameatingmonkey.net
-        urired.spameatingmonkey.net
-        virbl.dnsbl.bit.nl
-        virus.rbl.jp
-        virus.rbl.msrbl.net
-        vote.drbl.caravan.ru
-        vote.drbl.gremlin.ru
-        web.rbl.msrbl.net
-        work.drbl.caravan.ru
-        work.drbl.gremlin.ru
-        wormrbl.imp.ch
-        xbl.spamhaus.org
-        zen.spamhaus.org"
+# put the maximum output file, the older will get deleted (the output will always have 1 line if it is set to 0 or less)
+MAX_OUTPUT_LINE=250
 
+# how many dig/host processes to run in parallel
+# this can be a number of threads (6)
+# or a percentage of cpu cores (75%)
+PARALLEL_JOB="50%"
+
+# How many tries and for how long to wait for DNS queries
+CONF_DNS_TRIES=2
+CONF_DNS_DURATION=3
+
+# Blacklists to check
+# Example formats:
+# - General format
+#   {ip_or_domain}={filter}#{type}
+# - IP based blocklist (default DNSBL, any valid return code will match)
+#   block.list.com
+# - IP based blocklist
+#   block.list.com#DNSBL
+# - IP based allowlist
+#   allow.list.com#DNSWL
+# - URI based blocklist
+#   uri.list.com#URIBL
+# - Regexp defined return code, only a match will qualify for list. Here it is 127.0.0.2 and 127.0.0.3
+#   block.list.com=127\.0\.0\.[23]
+# - Regexp defined return code for a URI based blocklist
+#   block.list.com=127\.0\.[0-9]+\.0#URIBL
+CONF_RBL_SERVICES="
+          whitelist.rbl.ispa.at#DNSWL
+          t3direct.dnsbl.net.au
+          ucepn.dnsbl.net.au
+          wpbl.dnsbl.net.au
+          bl.reynolds.net.au
+          bl.mav.com.br
+          openproxy.bls.digibase.ca
+          proxyabuse.bls.digibase.ca
+          spambot.bls.digibase.ca
+          probes.dnsbl.net.auproxy.bl.gweep.ca
+          rbl2.triumf.ca
+          wbl.triumf.ca#DNSWL
+          ipbl.zeustracker.abuse.ch
+          uribl.zeustracker.abuse.ch
+          spamrbl.imp.ch
+          wormrbl.imp.ch
+          rbl.lugh.ch
+          dnsrbl.swinog.ch
+          uribl.swinog.ch
+          blacklist.woody.ch
+          ipv6.blacklist.woody.ch
+          uri.blacklist.woody.ch
+          block.ascams.com
+          superblock.ascams.com
+          rbl.blockedservers.com
+          netscan.rbl.blockedservers.com
+          spam.rbl.blockedservers.com
+          list.blogspambl.com
+          dnsbl1.dnsbl.borderware.com
+          dnsbl2.dnsbl.borderware.com
+          dnsbl3.dnsbl.borderware.com
+          dul.dnsbl.borderware.com
+          csi.cloudmark.com
+          dnsbl.cobion.com
+          bogons.cymru.com
+          v4.fullbogons.cymru.com
+          v6.fullbogons.cymru.com
+          rbl.dns-servicios.com
+          0outspam.fusionzero.com
+          0spam.fusionzero.com
+          0spam-n.fusionzero.com
+          0spamtrust.fusionzero.com
+          0spamurl.fusionzero.com
+          accredit.habeas.com
+          hil.habeas.com
+          hul.habeas.com
+          sa-accredit.habeas.com
+          sohul.habeas.com
+          blacklist.hostkarma.com
+          iadb.isipp.com
+          iadb2.isipp.com
+          iddb.isipp.com
+          wadb.isipp.com
+          black.junkemailfilter.com
+          hostkarma.junkemailfilter.com
+          nobl.junkemailfilter.com
+          q.mail-abuse.com
+          r.mail-abuse.com
+          cidr.bl.mcafee.com
+          dnsbl.forefront.microsoft.com
+          bl.mipspace.com
+          bl.nordspam.com
+          dbl.nordspam.com#URIBL
+          safe.dnsbl.prs.proofpoint.com
+          rbl.realtimeblacklist.com
+          mailsl.dnsbl.rjek.com
+          urlsl.dnsbl.rjek.com
+          dynip.rothen.com
+          blackholes.scconsult.com
+          reputation-domain.rbl.scrolloutf1.com
+          reputation-ns.rbl.scrolloutf1.com
+          bl.score.senderscore.com
+          feb.spamlab.com
+          rbl.spamlab.com
+          all.spamrats.com
+          auth.spamrats.com
+          dyna.spamrats.com
+          noptr.spamrats.com
+          spam.spamrats.com
+          rbl.suresupport.com
+          psbl.surriel.com
+          whitelist.surriel.com#DNSWL
+          bl.tiopan.com
+          dbl.tiopan.com#URIBL
+          ubl.unsubscore.com
+          spam.dnsbl.anonmails.de
+          bl.blocklist.de
+          dnsbl.darklist.de
+          dnsbl.inps.de
+          dnswl.inps.de#DNSWL
+          admin.bl.kundenserver.de
+          relays.bl.kundenserver.de
+          schizo-bl.kundenserver.de
+          spamblock.kundenserver.de
+          worms-bl.kundenserver.de
+          dnsbl.madavi.de
+          torserver.tor.dnsbl.sectoor.de
+          dunk.dnsbl.tuxad.de
+          spamsources.fabel.dk
+          st.technovision.dk
+          dnsbl.abyan.es
+          eswlrev.dnsbl.rediris.es#DNSWL
+          mtawlrev.dnsbl.rediris.es#DNSWL
+          dnsbl.isx.fr
+          all.spam-rbl.fr
+          pofon.foobar.hu
+          ispmx.pofon.foobar.hu
+          uribl.pofon.foobar.hu
+          singular.ttk.pte.hu
+          blacklist.netcore.co.in
+          dnsbl.rv-soft.info
+          nana.bl.techtheft.info
+          other.bl.techtheft.info
+          robot.bl.techtheft.info
+          scanning.bl.techtheft.info
+          source.bl.techtheft.info
+          support.bl.techtheft.info
+          virus.bl.techtheft.info
+          watchlist.bl.techtheft.info
+          db.wpbl.info
+          rbl.jp
+          spamlist.or.kr
+          bl.fmb.la
+          communicado.fmb.la
+          nsbl.fmb.la
+          sa.fmb.la
+          short.fmb.la
+          dnsbl.anticaptcha.net
+          dnsbl6.anticaptcha.net
+          blacklist.mail.ops.asp.att.net
+          blacklist.sequoia.ops.asp.att.net
+          blacklist.mailrelay.att.net
+          rbl.blakjak.net
+          dul.blackhole.cantv.net
+          hog.blackhole.cantv.net
+          rhsbl.blackhole.cantv.net
+          rot.blackhole.cantv.net
+          spam.blackhole.cantv.net
+          rbl.choon.net
+          ipv6.rbl.choon.net
+          rwl.choon.net
+          ipv6.rwl.choon.net
+          dnsbl.cyberlogic.net
+          fnrbl.fast.net
+          truncate.gbudb.net
+          rbl.interserver.net
+          rbl.iprange.net
+          dnsbl.kempt.net
+          spamguard.leadmon.net
+          uribl.mailcleaner.net
+          dnsbl.mailshell.net
+          bl.mailspike.net
+          rep.mailspike.net
+          wl.mailspike.net#DNSWL
+          z.mailspike.net
+          ix.dnsbl.manitu.net
+          combined.rbl.msrbl.net
+          images.rbl.msrbl.net
+          phishing.rbl.msrbl.net
+          spam.rbl.msrbl.net
+          virus.rbl.msrbl.net
+          web.rbl.msrbl.net
+          relays.nether.net
+          trusted.nether.net
+          unsure.nether.net
+          dul.pacifier.net
+          all.s5h.net
+          bl.scientificspam.net
+          rhsbl.scientificspam.net
+          korea.services.net
+          dnsbl.sorbs.net
+          block.dnsbl.sorbs.net
+          exitnodes.tor.dnsbl.sectoor.dehttp.dnsbl.sorbs.net
+          dul.dnsbl.sorbs.net
+          escalations.dnsbl.sorbs.net
+          http.dnsbl.sorbs.net
+          misc.dnsbl.sorbs.net
+          new.dnsbl.sorbs.net
+          noservers.dnsbl.sorbs.net
+          old.dnsbl.sorbs.net
+          problems.dnsbl.sorbs.net
+          proxies.dnsbl.sorbs.net
+          recent.dnsbl.sorbs.net
+          relays.dnsbl.sorbs.net
+          safe.dnsbl.sorbs.net
+          smtp.dnsbl.sorbs.net
+          socks.dnsbl.sorbs.net
+          spam.dnsbl.sorbs.net
+          new.spam.dnsbl.sorbs.net
+          old.spam.dnsbl.sorbs.net
+          recent.spam.dnsbl.sorbs.net
+          web.dnsbl.sorbs.net
+          zombie.dnsbl.sorbs.net
+          aspews.ext.sorbs.net
+          l1.bbfh.ext.sorbs.net
+          l2.bbfh.ext.sorbs.net
+          l3.bbfh.ext.sorbs.net
+          l4.bbfh.ext.sorbs.net
+          rhsbl.sorbs.net
+          badconf.rhsbl.sorbs.net
+          nomail.rhsbl.sorbs.net
+          bl.spamcop.net
+          backscatter.spameatingmonkey.net
+          bl.spameatingmonkey.net
+          fresh.spameatingmonkey.net
+          fresh10.spameatingmonkey.net
+          fresh15.spameatingmonkey.net
+          fresh30.spameatingmonkey.net
+          freshzero.spameatingmonkey.net
+          bl.ipv6.spameatingmonkey.net
+          netbl.spameatingmonkey.net
+          uribl.spameatingmonkey.net
+          urired.spameatingmonkey.net
+          bsb.spamlookup.net
+          dnsbl.spfbl.net
+          score.spfbl.net
+          dnswl.spfbl.net#DNSWL
+          bl.suomispam.net
+          dbl.suomispam.net#URIBL
+          gl.suomispam.net
+          dob.sibl.support-intelligence.net
+          srn.surgate.net
+          srnblack.surgate.net
+          rbl.tdk.net
+          dnsbl-0.uceprotect.net
+          dnsbl-1.uceprotect.net
+          dnsbl-2.uceprotect.net
+          all.rbl.webiron.net
+          babl.rbl.webiron.net
+          cabl.rbl.webiron.net
+          crawler.rbl.webiron.net
+          stabl.rbl.webiron.net
+          dnsbl.zapbl.net
+          rhsbl.zapbl.net
+          rbl.zenon.net
+          dnsbl.beetjevreemd.nl
+          bitonly.dnsbl.bit.nl
+          virbl.bit.nl
+          blacklist.sci.kun.nl
+          whitelist.sci.kun.nl#DNSWL
+          blackholes.tepucom.nl
+          bl.konstant.no
+          bl.0spam.org
+          nbl.0spam.org
+          url.0spam.org
+          cbl.abuseat.org
+          orvedb.aupads.org
+          rsbl.aupads.org
+          ips.backscatterer.org
+          b.barracudacentral.org
+          bb.barracudacentral.org
+          list.bbfh.org
+          plus.bondedsender.org
+          query.bondedsender.org
+          dnsblchile.org
+          dnsrbl.org
+          dwl.dnswl.org#DNSWL
+          list.dnswl.org#DNSWL
+          bl.drmx.org
+          dnsbl.dronebl.org
+          rbl.efnet.org
+          tor.efnet.org
+          rbl.efnetrbl.org
+          dnsbl.rangers.eu.org
+          dnsbl.httpbl.org
+          mail-abuse.blacklist.jippg.org
+          dnsbl.justspam.org
+          bl.mailspike.org
+          bl.nosolicitado.org
+          bl.worst.nosolicitado.org
+          dnsbl.openresolvers.org
+          spam.pedantic.org
+          access.redhawk.org
+          abuse.rfc-clueless.org
+          bogusmx.rfc-clueless.org
+          dsn.rfc-clueless.org
+          elitist.rfc-clueless.org
+          fulldom.rfc-clueless.org
+          postmaster.rfc-clueless.org
+          whois.rfc-clueless.org
+          public.sarbl.org
+          rbl.schulte.org
+          sbl.spamdown.org
+          dbl.spamhaus.org#URIBL
+          vouch.dwl.spamhaus.org#DNSWL
+          pbl.spamhaus.org
+          sbl.spamhaus.org
+          sbl-xbl.spamhaus.org
+          swl.spamhaus.org#DNSWL
+          xbl.spamhaus.org
+          zen.spamhaus.org
+          abuse.surbl.org
+          cr.surbl.org
+          multi.surbl.org
+          mw.surbl.org
+          dnsbl.tornevall.org
+          opm.tornevall.org
+          free.v4bl.org
+          ip.v4bl.org
+          ips.whitelisted.org#DNSWL
+          dnsbl.calivent.com.pe
+          forbidden.icm.edu.pl
+          dyn.rbl.polspam.pl
+          lblip4.rbl.polspam.pl
+          lblip6.rbl.polspam.pl
+          rblip4.rbl.polspam.pl
+          rblip6.rbl.polspam.pl
+          rhsbl.rbl.polspam.pl
+          rbl.abuse.ro
+          uribl.abuse.ro
+          vote.drbl.caravan.ru
+          work.drbl.caravan.ru
+          dul.dnsbl.sorbs.netdul.ru
+          bl.shlink.orgdul.ru
+          dnsbl.rymsho.ru
+          rhsbl.rymsho.ru
+          netblockbl.spamgrouper.to
+          dnsbl.mcu.edu.tw
+          dnsbl.net.ua
+          rbl.fasthosts.co.uk
+          torexit.dan.me.uk
+          bsb.empty.us
+          88.blocklist.zap"
+
+# reputation/scoring pages
+# score.senderscore.com
+
+#CONF_RBL_SERVICES_TEST="
+#        rbl.rbldns.ru
+#        rbl.rbldns.ru=127\.0\.0\.1
+#        rbl.rbldns.ru#DNSWL
+#        black.list.com=127.0.[0-9]+.0#URIBL
+#        dbl.spamhaus.org#URIBL
+#        t3direct.dnsbl.net.au=127\.0\.0\.1#DNSWL
+#        t3direct.dnsbl.net.au#BLA
+#        t3direct.dnsbl.net.au%127\.0\.0\.1#DNSWL"
+
+# Define spinner
+SPINNER="-\|/"
+#SPINNER=".oO@*"
+#SPINNER="▉▊▋▌▍▎▏▎▍▌▋▊▉"
+#SPINNER="←↖↑↗→↘↓↙"
+#SPINNER="▁▂▃▄▅▆▇█▇▆▅▄▃▁"
+#SPINNER="▖▘▝▗"
+#SPINNER="┤┘┴└├┌┬┐"
+#SPINNER="◢◣◤◥"
+#SPINNER="◰◳◲◱"
+#SPINNER="◴◷◶◵"
+#SPINNER="◐◓◑◒"
+
+DNSSERVER=""
+RBL_SERVICE_LIST=""
+VERIFY_BL=""
+VERBOSE=0
+PLAIN=""
+USE_CACHE=FALSE
 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ }
-
 
 # Definitions {
 
-    # Common regular expressions
-    REGEX_IP='\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)'
-    REGEX_DOMAIN='\([a-zA-Z0-9]\+\(-[a-zA-Z0-9]\+\)*\.\)\+[a-zA-Z]\{2,\}'
-    REGEX_TDL='\([a-zA-Z0-9]\+\(-[a-zA-Z0-9]\+\)*\.\)[a-zA-Z]\{2,\}$'
+# Common regular expressions
+REGEX_IP='\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)'
+REGEX_IPV6='\([0-9a-fA-F]\{0,4\}:\)\{1,7\}[0-9a-fA-F]\{0,4\}'
+REGEX_DOMAIN='\([a-zA-Z0-9]\+\(-[a-zA-Z0-9]\+\)*\.\)\+[a-zA-Z]\{2,\}'
+#REGEX_TDL='\([a-zA-Z0-9]\+\(-[a-zA-Z0-9]\+\)*\.\)[a-zA-Z]\{2,\}$'
+REGEX_LIST='^[ \\t]*([^=#]+)(=(([^#])+))?(#(DNSBL|DNSWL|URIBL))?[ \\t]*$'
 
-    # Colors
-    if [[ $- == *i* ]]; then
-        RED=$(tput setaf 1)
-        GREEN=$(tput setaf 2)
-        YELLOW=$(tput setaf 3)
-        CLEAR=$(tput sgr0)
-    else
-        RED=$(tput -T xterm setaf 1)
-        GREEN=$(tput -T xterm setaf 2)
-        YELLOW=$(tput -T xterm setaf 3)
-        CLEAR=$(tput -T xterm sgr0)
-    fi
-
-    # Define spinner
-    SPINNER="-\|/"
-    #SPINNER=".oO@*"
-    #SPINNER="▉▊▋▌▍▎▏▎▍▌▋▊▉"
-    #SPINNER="←↖↑↗→↘↓↙"
-    #SPINNER="▁▂▃▄▅▆▇█▇▆▅▄▃▁"
-    #SPINNER="▖▘▝▗"
-    #SPINNER="┤┘┴└├┌┬┐"
-    #SPINNER="◢◣◤◥"
-    #SPINNER="◰◳◲◱"
-    #SPINNER="◴◷◶◵"
-    #SPINNER="◐◓◑◒"
-
+# Colors
+if [[ $- == *i* ]]; then
+  RED=$(tput setaf 1)
+  GREEN=$(tput setaf 2)
+  YELLOW=$(tput setaf 3)
+  CLEAR=$(tput sgr0)
+else
+  RED=$(tput -T xterm setaf 1)
+  GREEN=$(tput -T xterm setaf 2)
+  YELLOW=$(tput -T xterm setaf 3)
+  CLEAR=$(tput -T xterm sgr0)
+fi
 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ }
 
+# This function is used to handle exit trap that can accept multiple trap arguments
+# syntax: traps <traps_cleanup_function> SIG1 SIG2 SIG3 ... SIGN[N]
+# eg: traps exit_function QUIT INT TERM EXIT
+traps() {
+  local clean_function
+  clean_function="$1"
+  shift
+  for sig; do
+    trap "${clean_function} ${sig}" "${sig}"
+  done
+}
 
-# Macros {
+# This function is used by traps() function to clean exit
+exit_script() {
+  ((CTRL_C_COUNT++))
+  if [[ ${CTRL_C_COUNT} == 1 ]]; then
+    local signal
+    signal="$1"
+    echo ""
+    if [ "${signal}" == "INT" ]; then
+      echo "ERROR: This script has been terminated by ${USER} user with ${signal} signal."
+    fi
+  fi
 
-    # Verbose printing
-    VERBOSE=0
-    info() {
-        if [ $VERBOSE -ge "$1" ]; then
-            echo "$2"
+  # Cleanup everything here
+
+  # Removing temp files ..."
+  rm -f "${PASSED_FILE}" "${ALLOW_FILE}" "${INVALID_FILE}" "${FAILED_FILE}"
+
+  # unsetting functions ...
+  unset -f parallel_check resolve text progress
+
+  # unsetting variables ...
+  unset REGEX_LIST REVERSED TARGET VERIFY_BL VERBOSE PLAIN \
+  RBL_SERVICE_COUNT YELLOW CLEAR RED GREEN SPINNER REGEX_IP REGEX_IPV6 REGEX_DOMAIN \
+  CMD_DIG DNSSERVER CONF_DNS_DURATION CONF_DNS_TRIES \
+  CMD_HOST CMD ALLOW_FILE FAILED_FILE PASSED_FILE INVALID_FILE
+
+  # Exit if FAILED_COUNT is perfectly set
+  if [[ ${FAILED_COUNT} =~ ^[0-9]+$ ]]; then
+    exit "${FAILED_COUNT}"
+  else
+  # or if FAILED_COUNT did not make it to the end, exit 1
+    exit 1
+  fi
+
+}
+
+
+# Verbose printing
+info() {
+  if [[ ${VERBOSE} -ge "$1" ]]; then
+    echo "$2"
+  fi
+}
+
+# Error handling
+error() {
+  echo "ERROR: $1" >&2
+  exit 254
+}
+
+# Handling script simple status
+check_status() {
+  local retval
+  retval="$1"
+  if [[ "${retval}" -eq 0 ]]; then
+    info 3 "[ OK ]"
+  else
+    error 1 "[ FAILED ]"
+  fi
+}
+
+exit_status() {
+  local retval
+  retval="$1"
+  exit "${retval}"
+}
+
+# Show progress (when -v option is not supplied)
+progress() {
+  local job_number rbl_service_count progress_bar x
+  job_number="$1"
+  rbl_service_count="$2"
+
+  # Bar
+  x=$((job_number % ${#SPINNER} + 1))
+  progress_bar=$(echo ${SPINNER} | awk "{ print substr(\$0, ${x}, 1) }")
+  if [[ -z "${PLAIN}" ]]; then
+    printf "\r "
+  fi
+
+  # BAR as printf arg so that backslash will be literally interpreted
+  printf "[ %s %3s%% ] checking... %4s / ${rbl_service_count}  " "${progress_bar}" $((job_number * 100 / rbl_service_count)) "${job_number}"
+}
+
+# Reverse IPv6 address
+reverseIPv6() {
+  echo "$1" | awk -F: 'BEGIN {OFS=""; }{addCount = 9 - NF; for(i=1; i<=NF;i++){if(length($i) == 0){ for(j=1;j<=addCount;j++){$i = ($i "0000");} } else { $i = substr(("0000" $i), length($i)+5-4);}}; print}' | rev | sed -e "s/./&./g;s/.$//"
+}
+
+# Reverse IPv4 address
+reverseIPv4() {
+  echo "$1" | sed -r 's/([0-9]{1,3}).([0-9]{1,3}).([0-9]{1,3}).([0-9]{1,3})/\4.\3.\2.\1/'
+}
+
+# Resolve the IP
+resolve() {
+
+  local ip_address record_type regex
+
+  ip_address="$1"
+
+  # IPv4?
+  if ipv6calc -qI ipv4addr "${ip_address}" &>/dev/null; then
+    echo "${ip_address}"
+  # IPv6?
+  elif ipv6calc -qI ipv6addr "${ip_address}" &>/dev/null; then
+    # Convert to full form before reversing
+    ip_address="$(ipv6calc -q --addr2fulluncompaddr "${ip_address}")"
+    echo "${ip_address}"
+    # Resolve domain
+  else
+    HOST="$1"
+    # Handle special resolve types
+    case "$2" in
+    "ns")
+      record_type="ns"
+      regex="${REGEX_DOMAIN}\.$"
+      ;;
+    *)
+      record_type="a"
+      regex="${REGEX_IP}$"
+      ;;
+    esac
+
+    case "${CMD}" in
+    "${CMD_DIG}")
+      ip_address=$("${CMD}" ${DNSSERVER} +short -t "${record_type}" +time=${CONF_DNS_DURATION} +tries=${CONF_DNS_TRIES} "${HOST}" | grep -om 1 "${regex}")
+      if [ -n "${ip_address}" ]; then
+        echo "${ip_address}"
+      else
+        ip_address=$("${CMD}" ${DNSSERVER} +short -t "aaaa" +time=${CONF_DNS_DURATION} +tries=${CONF_DNS_TRIES} "${HOST}" | grep -om 1 "${REGEX_IPV6}")
+
+        [[ -n "${ip_address}" ]] && echo "${ip_address}"
+      fi
+
+      ;;
+    "${CMD_HOST}")
+      ip_address=$("${CMD}" -t "${record_type}" -W ${CONF_DNS_DURATION} -R ${CONF_DNS_TRIES} "${HOST}" ${DNSSERVER} | tail -n1 | grep -om 1 "${regex}")
+      if [ -n "${ip_address}" ]; then
+        echo "${ip_address}"
+      else
+        ip_address=$("${CMD}" -t "aaaa" -W ${CONF_DNS_DURATION} -R ${CONF_DNS_TRIES} "${HOST}" ${DNSSERVER} | tail -n1 | grep -om 1 "${REGEX_IPV6}")
+
+        [[ -n "${ip_address}" ]] && echo "${ip_address}"
+      fi
+      ;;
+    esac
+  fi
+}
+
+# Result info for IP
+text() {
+  local ip_address
+  # IP already?
+  ip_address=$(echo "$1" | grep "^${REGEX_IP}$")
+  if [[ -n "${ip_address}" ]]; then
+    echo "${ip_address}"
+
+  # Resolve domain
+  else
+    local record_type="txt"
+    case "${CMD}" in
+    "${CMD_DIG}") "${CMD}" ${DNSSERVER} +short -t "${record_type}" +time=${CONF_DNS_DURATION} +tries=${CONF_DNS_TRIES} "$1" ;;
+    "${CMD_HOST}") "${CMD}" -t "${record_type}" -W ${CONF_DNS_DURATION} -R ${CONF_DNS_TRIES} "$1" ${DNSSERVER} | tail -n1 ;;
+    esac
+  fi
+}
+
+# Iterate over all blocklists
+parallel_check() {
+  local prefix job_number blocklist_url response
+  job_number=$1
+  blocklist_url=$2
+
+  # Parse list entry
+  if [[ ! ${blocklist_url} =~ ${REGEX_LIST} ]]; then
+    error "List entry ${blocklist_url} broken"
+  else
+    local domain="${BASH_REMATCH[1]}"
+    local filter="${BASH_REMATCH[3]}"
+    local type="${BASH_REMATCH[6]}"
+  fi
+
+  # What should we test
+  if [[ "${type}" != "URIBL" ]]; then
+    # IP based test
+    local test="${REVERSED}.${domain}."
+  else
+    # Domain name based test (URI)
+    local test="${TARGET}.${domain}."
+  fi
+
+  # Make sure the info is shown if we are checking the servers
+  if [[ -n "${VERIFY_BL}" && "${VERBOSE}" -lt 1 ]]; then
+    local VERBOSE=1
+  fi
+
+  # For verbose output
+  if [[ "${VERBOSE}" -ge 1 ]]; then
+    local status
+
+    # Show percentage
+    # This progress bar is for when at least -v is supplied
+    status=$(printf " %3s" $((job_number * 100 / RBL_SERVICE_COUNT)))
+    status="${status}% "
+
+    # Show additional info
+    if [[ "${VERBOSE}" -ge 3 ]]; then
+      prefix=$(printf "%-60s" "${test}")
+    else
+      prefix=$(printf "%-50s" "${domain}")
+    fi
+
+    prefix="${status} ${prefix}"
+    if [[ -z "${PLAIN}" ]]; then
+      printf "%s \b" "${prefix}"
+    fi
+
+  elif [[ "${VERBOSE}" -ge 0 ]]; then
+    if [[ -z "${PLAIN}" ]]; then
+      progress "${job_number}" "${RBL_SERVICE_COUNT}"
+    fi
+  fi
+
+  # Get the status
+
+  response=$(resolve "${test}")
+
+  # Not blocklisted
+  if [[ -z "${response}" ]]; then
+
+    # Make sure the server is viable
+    local error=""
+    if [[ "${VERIFY_BL}" ]]; then
+      local TDL
+      TDL=$(echo "${domain}" | grep -om 1 '\([a-zA-Z0-9]\+\(-[a-zA-Z0-9]\+\)*\.\)[a-zA-Z]\{2,\}$')
+      if [[ ! "$(resolve "${TDL}" ns)" ]]; then
+        if [[ -z "${PLAIN}" ]]; then printf "\r"; fi
+        printf "%s%sUnreachable server%s\n" "${YELLOW}" "${prefix}" "${CLEAR}"
+        echo "${blocklist_url}" | cut -d= -f1 >>"${INVALID_FILE}"
+        error=true
+      fi
+    fi
+
+    if [[ -z "${error}" ]]; then
+      if [[ -n "${VERIFY_BL}" || "${VERBOSE}" -ge 1 ]]; then
+        if [[ -z "${PLAIN}" ]]; then printf "\r"; fi
+        printf "%s%s✓%s\n" "${CLEAR}" "${prefix}" "${CLEAR}"
+      fi
+      echo "${blocklist_url}" | cut -d= -f1 >>"${PASSED_FILE}"
+    fi
+
+  # Invalid response
+  elif [[ ! "${response}" =~ ${filter} ]]; then
+    if [[ "${VERBOSE}" -ge 1 ]]; then
+      if [[ -z "${PLAIN}" ]]; then printf "\r"; fi
+      printf "%s%sinvalid response (%s)%s\n" "${YELLOW}" "${prefix}" "${response}" "${CLEAR}"
+      printf "%s%${#prefix}s%s%s\n" "${YELLOW}" "TXT: " "$(text "${test}")" "${CLEAR}"
+    fi
+    echo "${blocklist_url}" | cut -d= -f1 >>"${INVALID_FILE}"
+
+  # matched
+  else
+    if [[ "${type}" != "DNSWL" ]]; then
+      if [[ "${VERBOSE}" -ge 1 ]]; then
+        if [[ -z "${PLAIN}" ]]; then printf "\r"; fi
+        printf "%s%sblocklisted (%s)%s\n" "${RED}" "${prefix}" "${response}" "${CLEAR}"
+        printf "%s%${#prefix}s%s%s\n" "${RED}" "TXT: " "$(text "${test}")" "${CLEAR}"
+      elif [[ "${VERBOSE}" -ge 0 ]]; then
+        if [[ -z "${PLAIN}" ]]; then
+          printf "\r                                                          "
+          printf "\r"
         fi
-    }
-
-    # Error handling
-    error() {
-        echo "ERROR: $1" >&2
-        exit 2
-    }
-
-    # Show progress
-    progress() {
-
-        # Bar
-        x=$(($1 % ${#SPINNER} + 1))
-        BAR=$(echo $SPINNER | awk "{ print substr(\$0, ${x}, 1) }")
-        if test -z "$PLAIN"; then
-            printf "\r ";
+        printf "%s%s%s : %s\n" "${RED}" "${domain}" "${CLEAR}" "${response}"
+      fi
+      echo "${blocklist_url}" | cut -d= -f1 >>"${FAILED_FILE}"
+    else
+      if [[ "${VERBOSE}" -ge 1 ]]; then
+        if [[ -z "${PLAIN}" ]]; then printf "\r"; fi
+        printf "%s%sallowlisted (%s)%s\n" "${GREEN}" "${prefix}" "${response}" "${CLEAR}"
+        printf "%s%${#prefix}s%s%s\n" "${GREEN}" "TXT: " "$(text "${test}")" "${CLEAR}"
+      elif [[ "${VERBOSE}" -ge 0 ]]; then
+        if [[ -z "${PLAIN}" ]]; then
+          printf "\r                                                          "
+          printf "\r"
         fi
+        printf "%s%s%s : %s\n" "${GREEN}" "${domain}" "${CLEAR}" "${response}"
+      fi
+      echo "${blocklist_url}" | cut -d= -f1 >>"${ALLOW_FILE}"
+    fi
+  fi
+}
 
-        # BAR as printf arg so that backslash will be litteraly interpreted
-        printf "[ %s %3s%% ] checking... %4s / $2  " "$BAR" $(($1 * 100 / $2)) "$1";
-    }
-
-    # Resolve the IP
-    resolve() {
-
-        # IP already?
-        IP=$(echo "$1" | grep "^$REGEX_IP$")
-        if [ "$IP" ]; then
-            echo "$IP"
-
-        # Resolve domain
-        else
-
-            # Handle special resolve types
-            case "$2" in
-                "ns" ) TYPE="ns"; REGEX="$REGEX_DOMAIN\.$";;
-                   * ) TYPE="a";  REGEX="$REGEX_IP$";;
-            esac
-
-            case "$CMD" in
-                $CMD_DIG ) "$CMD" $DNSSERVER +short -t "$TYPE" +time=$CONF_DNS_DURATION +tries=$CONF_DNS_TRIES "$1" | grep -om 1 "$REGEX";;
-                $CMD_HOST ) "$CMD" -t "$TYPE" -W $CONF_DNS_DURATION -R $CONF_DNS_TRIES "$1" $DNSSERVER | tail -n1 | grep -om 1 "$REGEX";;
-            esac
-        fi
-    }
-
-    # Load the blacklist from file
-    loadBlacklists() {
-
-        # Make sure the file is readable
-        if [ ! "$1" ]; then
-            error "Option -l requires an additional parameter";
-        elif [ ! -r $1 ]; then
-            error "File $1 cannot be opened for reading, make sure it exists and that you have appropriate privileges"
-        fi
-
-        CONF_BLACKLISTS=$(cat "$1")
-    }
-
-    # Show help
-    showHelp() {
-        cat <<HELP
+# Show help
+showHelp() {
+  cat <<HELP
 blcheck [options] <domain_or_IP>
 
 Supplied domain must be full qualified domain name.
 If the IP is supplied, the PTR check cannot be executed and will be skipped.
 
 -d dnshost  Use host as DNS server to make lookups
--l file     Load blacklists from file, separated by space or new line
--c          Warn if the top level domain of the blacklist has expired
+-l file|URL Load blocklists from file or URL, list can be separated by space or new line
+-c          Warn if the top level domain of the blocklist has expired
 -v          Verbose mode, can be used multiple times (up to -vvv)
--q          Quiet modem with absolutely no output (useful for scripts)
+-q          Quiet mode with absolutely no output (useful for scripts)
 -p          Plain text output (no coloring, no interactive status)
+-o file     Specify path for writing the blocklist output file
+-j N or N%  Specify a number of threads or percentage of cpu cores to run as parallel
+-k          Use result from previous output file
 -h          The help you are just reading
-
-Result of the script is the number of blacklisted entries. So if the supplied
-IP is not blacklisted on any of the servers the result is 0.
+-V          Show version information
+Result of the script is the number of blocklisted entries. So if the supplied
+IP is not blocklisted on any of the servers the result is 0.
 
 HELP
-        exit;
-    }
+  exit
+}
 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ }
 
+RETVAL=1
+
 # Parse the params
-while getopts :vqphcl:d: arg; do
-    case "$arg" in
-        d) DNSSERVER=$OPTARG;;
-        l) loadBlacklists $OPTARG;;
-        c) VERIFY_BL=TRUE;;
-        v) VERBOSE=$(( (VERBOSE + 1) % 4));;
-        q) VERBOSE=-1;;
-        p) PLAIN=1 RED="" GREEN="" YELLOW="" CLEAR="" ;;
-        h) showHelp;;
-        ?) error "Unknown option $OPTARG";;
-    esac
+while getopts :vVqphcl:d:o:j:k arg; do
+  case "${arg}" in
+  d)
+    DNSSERVER="${OPTARG}"
+    if [[ -z "${DNSSERVER}" ]]; then
+      error "Option -d requires a dns server to make lookups"
+    fi
+    ;;
+  l)
+    RBL_SERVICE_LIST="${OPTARG}"
+
+    if [[ -z "${RBL_SERVICE_LIST}" ]]; then
+      error "Option -l requires a URL or path of the blocklists additional parameter"
+    fi
+
+    if [[ "${RBL_SERVICE_LIST}" =~ ^(http|https):// ]]; then
+      if [[ "$(curl -s -o /dev/null -w "%{http_code}" "${RBL_SERVICE_LIST}")" -eq 200 ]]; then
+        curl -s -o "${SCRIPT_PATH}/online_rbl.txt" "${RBL_SERVICE_LIST}"
+        check_status "$?"
+        RBL_SERVICE_LIST="${SCRIPT_PATH}/online_rbl.txt"
+        # Remove carriage returns
+        sed -i 's/\r//g' "${RBL_SERVICE_LIST}"
+        # If the file contain html tags, it's not a valid blocklist file
+        if grep -qc "<" "${RBL_SERVICE_LIST}"; then
+          # rm -f "${SCRIPT_PATH}/online_rbl.txt"
+          error "The blocklist file is not valid"
+        fi
+      else
+        error "The URL ${RBL_SERVICE_LIST} is not available"
+      fi
+    else
+      # Make sure the file is exist and readable
+      if [[ ! -r "${RBL_SERVICE_LIST}" ]]; then
+        error "File ${RBL_SERVICE_LIST} cannot be opened for reading, make sure it exists and that you have appropriate privileges"
+      fi
+    fi
+    CONF_RBL_SERVICES=$(cat "${RBL_SERVICE_LIST}")
+    ;;
+  c) VERIFY_BL=TRUE ;;
+  v) VERBOSE=$((VERBOSE + 1)) ;;
+  V)
+    echo "${_APP_VERSION}"
+    exit 0
+    ;;
+  q) VERBOSE=-1 ;;
+  p) PLAIN=TRUE RED="" GREEN="" YELLOW="" CLEAR="" ;;
+  o)
+    OUTPUT="${OPTARG}"
+    if [ -z "${OUTPUT}" ]; then
+      error "Option -o requires a path to write blocklists output file"
+    fi
+    ;;
+  j)
+    PARALLEL_JOB="${OPTARG}"
+    if [ -z "${PARALLEL_JOB}" ]; then
+      error "Option -j requires a number of threads or percentage of cpu cores"
+    fi
+    ;;
+  k)
+    USE_CACHE=TRUE
+    ;;
+  h) showHelp ;;
+  ?) error "Unknown option ${OPTARG}" ;;
+  esac
 done
 shift $((OPTIND - 1))
 
 # Get the domain
-if [ $# -eq 0 ]; then
-    echo "Missing target domain or IP."
-    showHelp
+if [[ $# -eq 0 ]]; then
+  echo "Missing target domain or IP."
+  showHelp
 fi
+
 TARGET=$1
+
+# Custom actions
+if [[ "${TARGET}" == "get-script-path" ]]; then
+  echo "${SCRIPT_PATH}"
+  exit_status "$?"
+elif [[ "${TARGET}" == "script-path" ]]; then
+  echo "${SCRIPT_PATH}"
+  exit_status "$?"
+elif [[ "${TARGET}" == "show-output" ]]; then
+  nano -c "${OUTPUT}"
+  exit_status "$?"
+elif [[ "${TARGET}" == "output" ]]; then
+  nano -c "${OUTPUT}"
+  exit_status "$?"
+elif [[ "${TARGET}" == "version" ]]; then
+  echo "v${_APP_VERSION}"
+  exit_status "$?"
+fi
+
+# Create output file
+touch "${OUTPUT}"
+RETVAL=$?
+[[ ${RETVAL} -ne 0 ]] && error "Could output file in that location: ${OUTPUT}"
+
+info 3 "Output location is ${OUTPUT}"
+
+# Make sure that the output file is limited to MAX_OUTPUT_LINE (delete the oldest record)
+if [[ -s "${OUTPUT}" ]]; then
+  TOTAL_OUTPUT=$(jq '.data[].ip' "${OUTPUT}" | wc -l)
+  info 3 "Total output scan: ${TOTAL_OUTPUT}"
+
+  if [ "${TOTAL_OUTPUT}" -ge ${MAX_OUTPUT_LINE} ]; then
+    ((EXCEED_COUNT = TOTAL_OUTPUT - MAX_OUTPUT_LINE))
+    info 2 "Notice, the output file has reached maximum of ${EXCEED_COUNT} IP(s). Deleting the oldest IPs scan result from the output file ..."
+    # Remove the oldest record from exceed count to total output (add plus 1 here to delete 2 times because we will add a new record later)
+    jq --argjson exceed_count "${EXCEED_COUNT}" 'del(.data[0: $exceed_count+1])' "${OUTPUT}" >"${OUTPUT}.tmp" && mv "${OUTPUT}.tmp" "${OUTPUT}"
+    check_status "$?"
+  fi
+else
+  # If output is empty we initialize new json
+  info 3 "Initialize new json file in ${OUTPUT}"
+  jq -n '{"data":[]}' >"${OUTPUT}"
+fi
+
+# Make sure that the output file is a valid JSON file
+if ! jq empty "${OUTPUT}" 2>/dev/null; then
+  error "Output file ${OUTPUT} is not a valid JSON file. Please remove it or specify a different output path."
+  exit 1
+fi
+
+info 3 "TARGET supplied is: ${TARGET}"
+
+if [ "${USE_CACHE}" == "TRUE" ]; then
+  info 2 "Checking for previous scan output file"
+  # Check if target IP is in output file and we only obtain the last scan result
+  TARGET_SEARCH=$(jq -r --arg target "${TARGET}" 'last(.data[] | select(.target==$target))' "${OUTPUT}")
+  if [[ "${TARGET_SEARCH}" != "null" ]]; then
+    info 0 "Notice, target [${TARGET}] was found in the previous scan"
+    TESTED_COUNT=$(echo "${TARGET_SEARCH}" | jq -r '.tested_count')
+    PASSED_COUNT=$(echo "${TARGET_SEARCH}" | jq -r '.passed_count')
+    ALLOW_COUNT=$(echo "${TARGET_SEARCH}" | jq -r '.whitelisted_count')
+    INVALID_COUNT=$(echo "${TARGET_SEARCH}" | jq -r '.invalid_count')
+    FAILED_COUNT=$(echo "${TARGET_SEARCH}" | jq -r '.blacklisted_count')
+    BLACKLISTED_DOMAINS=$(echo "${TARGET_SEARCH}" | jq -r '.blacklisted_domains')
+    BAD_SCORE=$(echo "${TARGET_SEARCH}" | jq -r '.target_bad_score')
+    LAST_SCAN_DATE=$(echo "${TARGET_SEARCH}" | jq -r '.last_scan_date')
+
+    # Print results
+    if [[ "${VERBOSE}" -ge 0 ]]; then
+      if [[ -z "${PLAIN}" ]]; then
+        printf "\r                                                    \n"
+      else
+        printf "                                                     \n"
+      fi
+
+      echo "----------------------------------------------------------"
+      echo "Result for ${TARGET} from output file:"
+      echo
+      printf "%-15s" "Tested:"
+      echo "${TESTED_COUNT}"
+      printf "%-15s" "Passed:"
+      echo "${GREEN}${PASSED_COUNT}${CLEAR}"
+      printf "%-15s" "Whitelisted:"
+      echo "${GREEN}${ALLOW_COUNT}${CLEAR}"
+      printf "%-15s" "Invalid:"
+      echo "${YELLOW}${INVALID_COUNT}${CLEAR}"
+      printf "%-15s" "Blacklisted:"
+      echo "${RED}${FAILED_COUNT}${CLEAR}"
+      if [[ "${FAILED_COUNT}" -gt 0 ]]; then
+        printf "%-15s" "Domains:"
+        echo "${RED}${BLACKLISTED_DOMAINS}${CLEAR}"
+      fi
+      printf "%-15s" "Bad score:"
+      if [ "${BAD_SCORE}" == "0.00" ]; then
+        echo "${GREEN}${BAD_SCORE} %${CLEAR}"
+      else
+        echo "${RED}${BAD_SCORE} %${CLEAR}"
+      fi
+      printf "%-15s" "Last scan on: "
+      date -d @"${LAST_SCAN_DATE}"
+      echo "----------------------------------------------------------"
+    fi
+    info 0 "Info, run target scan without -k option to obtain new data"
+    exit "${FAILED_COUNT}"
+
+  fi
+fi
+
+# dig+host can be installed with: apt-get install dnsutils or yum install bind-utils
+# ipv6calc can be installed with: apt-get install ipv6calc or yum install ipv6calc
+BIN_DEPS="ipv6calc dig host jq nano"
+for BIN_DEP in $BIN_DEPS; do
+  which "${BIN_DEP}" >/dev/null ||
+    NOT_FOUND="${BIN_DEP} ${NOT_FOUND}"
+done
+
+if [ -n "${NOT_FOUND}" ]; then
+  error "Required program could not be found: ${NOT_FOUND}"
+fi
+
+if [ ! $(which parallel 2>/dev/null) ]; then
+  echo "Parallel missing, trying to install..."
+  if [ $(which yum 2>/dev/null) ]; then
+    [ ! "$(yum -q provides parallel)" ] && yum -y -q install epel-release
+    yum -y -q install parallel
+  elif [ $(which dnf 2>/dev/null) ]; then
+    [ ! "$(dnf -q provides parallel)" ] && dnf -y -q install epel-release
+    dnf -y -q install parallel
+  else #assumed debian-like
+    apt-get -qq update
+    apt-get -y -q install parallel
+  fi
+  if [ "$(which parallel 2>/dev/null)" ]; then
+    mkdir ~/.parallel
+    touch ~/.parallel/will-cite
+  else
+    error "Failed to install parallel, exiting."
+  fi
+fi
 
 # Some shells disable parsing backslash in echo statements by default
 # Set the flag to enable echo to behave consistently across platforms
@@ -322,196 +1014,215 @@ shopt -s xpg_echo
 
 # Get the command we will use: dig or host
 CMD_DIG=$(which dig)
-CMD_HOST=$(which host)
-if [ "$CMD_DIG" ]; then
-    if [[ $DNSSERVER ]]; then
-        DNSSERVER="@$DNSSERVER"
-    fi
-    CMD=$CMD_DIG
-elif [ "$CMD_HOST" ]; then
-    CMD=$CMD_HOST
+if [[ -n "${CMD_DIG}" ]]; then
+  if [[ -n "${DNSSERVER}" ]]; then
+    DNSSERVER="@${DNSSERVER}"
+  fi
+  CMD=${CMD_DIG}
+else
+  CMD_HOST=$(which host)
+  if [[ -n "${CMD_HOST}" ]]; then
+    CMD=${CMD_HOST}
+  fi
 fi
-if [ ! "$CMD" ]; then
-    error "Either dig or host command is required."
+
+if [[ -z "${CMD}" ]]; then
+  error "Either dig or host command is required."
 fi
-info 3 "Using $CMD to reslove DNS queries"
+
+info 3 "Using ${CMD} to resolve DNS queries"
 
 # Parse IP
-IP=$(resolve "$TARGET")
-if [ ! "$IP" ]; then
-    error "No DNS record found for $TARGET"
-elif [ "$IP" != "$TARGET" ]; then
-    DOMAIN=$TARGET
-    info 2 "Using $TARGET for target, resolved to $IP"
+IP=$(resolve "${TARGET}")
+if [[ -z "${IP}" ]]; then
+  error "No DNS record found for ${TARGET}"
+elif [[ "${IP}" != "${TARGET}" ]]; then
+  DOMAIN=${TARGET}
+  info 2 "Using ${TARGET} for target, resolved to ${IP}"
+  TARGET_TYPE="domain"
 else
-    info 3 "Using $TARGET for target"
+  info 3 "Using ${TARGET} for target"
+  TARGET_TYPE="ip"
 fi
 
 # Reverse the IP
-REVERSED=$(echo "$IP" | sed -ne "s~^$REGEX_IP$~\4.\3.\2.\1~p")
-info 3 "Using $REVERSED for reversed IP"
+if ipv6calc -qI ipv6addr "${IP}" &>/dev/null; then
+  REVERSED=$(reverseIPv6 "${IP}")
+else
+  REVERSED=$(reverseIPv4 "${IP}")
+fi
+
+info 3 "Using ${REVERSED} for reversed IP"
 
 # Get the PTR
 info 3 "Checking the PTR record"
-case "$CMD" in
-    $CMD_DIG ) PTR=$("$CMD" $DNSSERVER +short -x "$IP" | sed s/\.$//);;
-    $CMD_HOST ) PTR=$("$CMD" "$IP" $DNSSERVER | tail -n1 | grep -o '[^ ]\+$' | sed s/\.$//)
+case "${CMD}" in
+"${CMD_DIG}") PTR=$("${CMD}" ${DNSSERVER} +short -x "${IP}" | sed s/\.$//) ;;
+"${CMD_HOST}") PTR=$("${CMD}" "${IP}" ${DNSSERVER} | tail -n1 | grep -o '[^ ]\+$' | sed s/\.$//) ;;
 esac
 
 # Validate PTR
-if [ ! "$PTR" ]; then
-    info 0 "${YELLOW}Warning: PTR lookup failed${CLEAR}"
-
+if [[ -z "${PTR}" ]]; then
+  info 0 "${YELLOW}Warning: PTR lookup failed${CLEAR}"
 else
-
-    # Match against supplied domain
-    info 1 "PTR resolves to $PTR"
-    if [ "$DOMAIN" ]; then
-        if [ "$DOMAIN" != "$PTR" ]; then
-            info 0 "${YELLOW}Warning: PTR record does not match supplied domain: $TARGET != $PTR${CLEAR}"
-        else
-            info 1 "${GREEN}PTR record matches supplied domain $PTR${CLEAR}"
-        fi
-    fi
-fi
-
-# Filter out the blacklists
-BLACKLISTS=""
-for BL in $CONF_BLACKLISTS; do
-    if [ "$BL" ]; then
-
-        # Make sure the domain is a proper one
-        DOMAIN=$(echo "$BL" | sed -e 's/^[ \t]*//' | grep ^"$REGEX_DOMAIN"$)
-        if [ ! "$DOMAIN" ]; then
-            info 0 "${YELLOW}Warning: blacklist '$BL' is not valid and will be ignored${CLEAR}"
-
-        else
-
-            # It is a proper blacklist
-            if [ "$BLACKLISTS" ]; then
-                BLACKLISTS=$(echo "$BLACKLISTS\n$DOMAIN")
-            else
-                BLACKLISTS="$BL"
-            fi
-        fi
-    fi
-done
-
-# Make sure we have at least one blacklist
-COUNT=$(($(echo "$BLACKLISTS" | wc -l)))
-if [ ! "$BLACKLISTS" ] || [ "$COUNT" -eq 0 ]; then
-    error "No blacklists have been specified"
-fi
-info 1 "Matching against $COUNT blacklists"
-
-# Initialize the counters
-INVALID=0
-PASSED=0
-FAILED=0
-
-# Interate over all blacklists
-I=0;
-for BL in $BLACKLISTS; do
-    PREFIX=
-    I=$((I + 1))
-
-    # What should we test
-    TEST="$REVERSED.$BL."
-
-    # Make sure the info is shown if we are cheking the servers
-    if [ "$VERIFY_BL" ] && [ $VERBOSE -lt 1 ]; then
-        VERBOSE=1
-    fi
-
-    # For verbose output
-    if [ $VERBOSE -ge 1 ]; then
-
-        # Show percentage
-        STATUS=$(printf " %3s" $((I * 100 / COUNT)))
-        STATUS="$STATUS%% "
-
-        # Show additional info
-        if [ $VERBOSE -ge 3 ]; then
-            PREFIX=$(printf "%-60s" "$TEST")
-        else
-            PREFIX=$(printf "%-50s" "$BL")
-        fi
-
-        PREFIX="$STATUS $PREFIX"
-        if test -z "$PLAIN"; then
-            printf "%s \b" "$PREFIX"
-        fi
-
-    elif [ $VERBOSE -ge 0 ]; then
-        if test -z "$PLAIN"; then
-            progress "$I" "$COUNT"
-        fi
-    fi
-
-    # Get the status
-    RESPONSE=$(resolve "$TEST")
-    START=$(echo "$RESPONSE" | cut -c1-4)
-
-    # Not blacklisted
-    if [ ! "$RESPONSE" ]; then
-
-        # Make sure the server is viable
-        ERROR=""
-        if [ "$VERIFY_BL" ]; then
-            TDL=$(echo "$BL" | grep -om 1 '\([a-zA-Z0-9]\+\(-[a-zA-Z0-9]\+\)*\.\)[a-zA-Z]\{2,\}$')
-            if [ ! "$(resolve "$TDL" ns)" ]; then
-                if test -z "$PLAIN"; then printf "\r"; fi
-                printf "%s%sUnreachable server%s\n" "$YELLOW" "$PREFIX" "$CLEAR";
-                INVALID=$((INVALID + 1))
-                ERROR=TRUE
-            fi
-        fi
-
-        if [ ! "$ERROR" ]; then
-            if [ "$VERIFY_BL" ] || [ $VERBOSE -ge 1 ]; then
-                if test -z "$PLAIN"; then printf "\r"; fi
-                printf "%s%s✓%s\n" "$CLEAR" "$PREFIX" "$CLEAR";
-            fi
-            PASSED=$((PASSED + 1))
-        fi;
-
-    # Invalid response
-    elif [ "$START" != "127."  ]; then
-        if [ $VERBOSE -ge 1 ]; then
-            if test -z "$PLAIN"; then printf "\r"; fi
-            printf "%s%sinvalid response (%s)%s\n" "$YELLOW" "$PREFIX" "$RESPONSE" "$CLEAR";
-        fi;
-        INVALID=$((INVALID + 1))
-
-    # Blacklisted
+  # Match against supplied domain
+  info 1 "PTR resolves to ${PTR}"
+  if [[ -n "${DOMAIN}" ]]; then
+    if [[ "${DOMAIN}" != "${PTR}" ]]; then
+      info 0 "${YELLOW}Warning: PTR record does not match supplied domain: ${TARGET} != ${PTR}${CLEAR}"
     else
-        if [ $VERBOSE -ge 1 ]; then
-            if test -z "$PLAIN"; then printf "\r"; fi
-            printf "%s%sblacklisted (%s)%s\n" "$RED" "$PREFIX" "$RESPONSE" "$CLEAR";
-        elif [ $VERBOSE -ge 0 ]; then
-            if test -z "$PLAIN"; then printf "\r                                                          "; printf "\r"; fi
-            printf "%s%s%s : %s\n" "$RED" "$BL" "$CLEAR" "$RESPONSE"
-        fi
-        FAILED=$((FAILED + 1))
+      info 1 "${GREEN}PTR record matches supplied domain ${PTR}${CLEAR}"
     fi
+  fi
+fi
+
+info 3 "Running with parallel job using CPU value of ${PARALLEL_JOB}"
+
+# Filter out the rbl service
+BLACKLISTS=""
+COUNT_DNSBL=0
+COUNT_DNSWL=0
+COUNT_URIBL=0
+RBL_SERVICE_COUNT=0
+for RBL_SERVICE in ${CONF_RBL_SERVICES}; do
+  if [[ "${RBL_SERVICE}" ]]; then
+    if [[ ${RBL_SERVICE} =~ ${REGEX_LIST} ]]; then
+      DOMAIN="${BASH_REMATCH[1]}"
+      if [[ -n "${BASH_REMATCH[3]}" ]]; then
+        FILTER="${BASH_REMATCH[3]}"
+      else
+        FILTER='127\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})'
+      fi
+      if [[ -n "${BASH_REMATCH[6]}" ]]; then
+        TYPE="${BASH_REMATCH[6]}"
+      else
+        TYPE='DNSBL'
+      fi
+
+      # Make sure the domain is a proper one
+      TMP=$(echo "${DOMAIN}" | sed -e 's/^[ \t]*//' | grep ^"${REGEX_DOMAIN}"$)
+      if [[ -z "${TMP}" ]]; then
+        info 0 "${YELLOW}Warning: domain '${DOMAIN}' is not valid and will be ignored${CLEAR}"
+      else
+        if [[ "${TARGET_TYPE}" == 'ip' && "${TYPE}" == 'URIBL' ]]; then
+          info 0 "${GREEN}Notice: URIBL entry '${DOMAIN}' will be ignore, because ${TARGET} is an IP address${CLEAR}"
+        else
+          case "${TYPE}" in
+          "DNSBL") COUNT_DNSBL=$((COUNT_DNSBL + 1)) ;;
+          "DNSWL") COUNT_DNSWL=$((COUNT_DNSWL + 1)) ;;
+          "URIBL") COUNT_URIBL=$((COUNT_URIBL + 1)) ;;
+          esac
+          RBL_SERVICE_COUNT=$((RBL_SERVICE_COUNT + 1))
+          # It is a proper blocklist
+          if [[ -n "${BLACKLISTS}" ]]; then
+            BLACKLISTS=$(echo -e "${BLACKLISTS}\n${DOMAIN}=${FILTER}#${TYPE}")
+          else
+            BLACKLISTS="${DOMAIN}=${FILTER}#${TYPE}"
+          fi
+        fi
+      fi
+    else
+      info 0 "${YELLOW}Warning: list entry '${RBL_SERVICE}' is not valid and will be ignored${CLEAR}"
+    fi
+  fi
 done
+
+# Make sure we have at least one blocklist
+if [[ "${RBL_SERVICE_COUNT}" -eq 0 ]]; then
+  error "No blocklists have been specified"
+fi
+
+info 1 "Matching against ${RBL_SERVICE_COUNT} entries:"
+info 1 "  - ${COUNT_DNSBL} DNS blocklists"
+info 1 "  - ${COUNT_DNSWL} DNS allowlists"
+info 1 "  - ${COUNT_URIBL} URI blocklists"
+
+# Create temporary files
+ALLOW_FILE=$(mktemp)
+FAILED_FILE=$(mktemp)
+PASSED_FILE=$(mktemp)
+INVALID_FILE=$(mktemp)
+
+# Export functions
+export -f parallel_check resolve text progress
+
+# Export variables (this is needed because we use parallel)
+export REGEX_LIST REVERSED TARGET VERIFY_BL VERBOSE PLAIN \
+  RBL_SERVICE_COUNT YELLOW CLEAR RED GREEN SPINNER REGEX_IP REGEX_IPV6 REGEX_DOMAIN \
+  CMD_DIG DNSSERVER CONF_DNS_DURATION CONF_DNS_TRIES \
+  CMD_HOST CMD ALLOW_FILE FAILED_FILE PASSED_FILE INVALID_FILE
+
+# Use parallel, call the function parallel_check
+# -j = an option to run parallel job
+# {#} = this means it will take the real job number as the first argument
+# {} = this will pass the the blacklist entries that will be obtained from BLACKLISTS after symbol :::
+#      this is used to display the blacklist entry
+
+traps exit_script QUIT INT TERM EXIT
+
+parallel -j "${PARALLEL_JOB}" 'parallel_check {#} {}' ::: "${BLACKLISTS}"
+
+PASSED_COUNT=$(wc -l <"${PASSED_FILE}")
+ALLOW_COUNT=$(wc -l <"${ALLOW_FILE}")
+INVALID_COUNT=$(wc -l <"${INVALID_FILE}")
+FAILED_COUNT=$(wc -l <"${FAILED_FILE}")
+BLACKLISTED_DOMAINS=$(paste -s -d, "${FAILED_FILE}")
+
+# Calculate score
+if [[ "${PASSED_COUNT}" -ne 0 ]]; then
+  TARGET_BAD_SCORE=$(echo "${PASSED_COUNT}  ${FAILED_COUNT}" | awk '{printf "%.2f", (100.00-(($1-$2)/$1)*100)}')
+else
+  TARGET_BAD_SCORE="0.00"
+fi
+
+# Construct the output as json format
+JSON_DATA=$(jq \
+  --arg target "${TARGET}" \
+  --arg ip "${IP}" \
+  --argjson tested_count "${RBL_SERVICE_COUNT}" \
+  --argjson passed_count "${PASSED_COUNT}" \
+  --argjson whitelisted_count "${ALLOW_COUNT}" \
+  --argjson invalid_count "${INVALID_COUNT}" \
+  --argjson blacklisted_count "${FAILED_COUNT}" \
+  --arg blacklisted_domains "${BLACKLISTED_DOMAINS}" \
+  --arg target_bad_score "${TARGET_BAD_SCORE}" \
+  '.data += [{ target: $target, ip: $ip, tested_count: $tested_count, passed_count: $passed_count, whitelisted_count: $whitelisted_count,  invalid_count: $invalid_count , blacklisted_count: $blacklisted_count, blacklisted_domains: $blacklisted_domains,  target_bad_score: $target_bad_score, last_scan_date: now|rint}]' "${OUTPUT}")
+
+# Write the output to the file
+printf '%s\n' "${JSON_DATA}" >"${OUTPUT}"
 
 # Print results
-if [ $VERBOSE -ge 0 ]; then
-    if test -z "$PLAIN"; then
-        printf "\r                                                    \n"
-    else
-        printf "                                                     \n"
-    fi
-    echo "----------------------------------------------------------"
-    echo Results for "$TARGET"
-    echo
-    printf "%-15s" "Tested:";   echo "${COUNT}"
-    printf "%-15s" "Passed:";   echo "${GREEN}${PASSED}${CLEAR}"
-    printf "%-15s" "Invalid:";  echo "${YELLOW}${INVALID}${CLEAR}"
-    printf "%-15s" "Blacklisted:";  echo "${RED}${FAILED}${CLEAR}"
-    echo "----------------------------------------------------------"
+if [[ "${VERBOSE}" -ge 0 ]]; then
+  if [[ -z "${PLAIN}" ]]; then
+    printf "\r                                                    \n"
+  else
+    printf "                                                     \n"
+  fi
+  echo "----------------------------------------------------------"
+  echo Results for "${TARGET}"
+  echo
+  printf "%-15s" "Tested:"
+  echo "${RBL_SERVICE_COUNT}"
+  printf "%-15s" "Passed:"
+  echo "${GREEN}${PASSED_COUNT}${CLEAR}"
+  printf "%-15s" "Whitelisted:"
+  echo "${GREEN}${ALLOW_COUNT}${CLEAR}"
+  printf "%-15s" "Invalid:"
+  echo "${YELLOW}${INVALID_COUNT}${CLEAR}"
+  printf "%-15s" "Blacklisted:"
+  echo "${RED}${FAILED_COUNT}${CLEAR}"
+  if [[ "${FAILED_COUNT}" -gt 0 ]]; then
+    printf "%-15s" "Domains:"
+    echo "${RED}${BLACKLISTED_DOMAINS}${CLEAR}"
+  fi
+  printf "%-15s" "Bad score:"
+  if [ "${TARGET_BAD_SCORE}" == "0.00" ]; then
+    echo "${GREEN}${TARGET_BAD_SCORE} %${CLEAR}"
+  else
+    echo "${RED}${TARGET_BAD_SCORE} %${CLEAR}"
+  fi
+  echo "----------------------------------------------------------"
+  info 2 "Output location: ${OUTPUT}"
 fi
 
-exit $FAILED;
-
+exit "${FAILED_COUNT}"
