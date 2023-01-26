@@ -28,8 +28,8 @@
 # description       : Test any domain against more than 100 blocklists.
 # author            : Intellex
 # contributors      : Darko Poljak, Oliver Mueller, Andrej Walilko, Arafat Ali
-# date              : Jan 13 2022
-# version           : 0.7.9
+# date              : Jan 27 2022
+# version           : 0.8.0
 # usage             : blcheck [options] <domain_or_ip>
 # reference         : http://multirbl.valli.org/list/
 # code style        : https://google.github.io/styleguide/shell.xml
@@ -496,12 +496,12 @@ exit_script() {
   CMD_DIG DNSSERVER CONF_DNS_DURATION CONF_DNS_TRIES \
   CMD_HOST CMD ALLOW_FILE FAILED_FILE PASSED_FILE INVALID_FILE
 
-  # Exit if FAILED_COUNT is perfectly set
-  if [[ ${FAILED_COUNT} =~ ^[0-9]+$ ]]; then
+  # Exit if FAILED_COUNT is perfectly set as integer and it is less or equal to 255 (max value of exit status)
+  if [[ ${FAILED_COUNT} =~ ^[0-9]+$ && "${FAILED_COUNT}" -le 255 ]]; then
     exit "${FAILED_COUNT}"
   else
-  # or if FAILED_COUNT did not make it to the end, exit 1
-    exit 1
+  # or if FAILED_COUNT did not make it to the end then we exit 254 (following the same logic as error() function)
+    exit 254
   fi
 
 }
@@ -527,7 +527,7 @@ check_status() {
   if [[ "${retval}" -eq 0 ]]; then
     info 3 "[ OK ]"
   else
-    error 1 "[ FAILED ]"
+    error "[ FAILED ]"
   fi
 }
 
@@ -782,8 +782,8 @@ If the IP is supplied, the PTR check cannot be executed and will be skipped.
 -k          Use result from previous output file
 -h          The help you are just reading
 -V          Show version information
-Result of the script is the number of blocklisted entries. So if the supplied
-IP is not blocklisted on any of the servers the result is 0.
+Result of the script is the number of blacklisted entries with the maximum result of 255. So if the supplied
+IP is not blacklisted on any of the servers the result is 0.
 
 HELP
   exit
@@ -890,7 +890,7 @@ fi
 # Create output file
 touch "${OUTPUT}"
 RETVAL=$?
-[[ ${RETVAL} -ne 0 ]] && error "Could output file in that location: ${OUTPUT}"
+[[ ${RETVAL} -ne 0 ]] && error "Could not output file in that location: ${OUTPUT}"
 
 info 3 "Output location is ${OUTPUT}"
 
