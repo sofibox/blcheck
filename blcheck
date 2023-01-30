@@ -28,7 +28,7 @@
 # description       : Test any domain against more than 100 blocklists.
 # author            : Intellex
 # contributors      : Darko Poljak, Oliver Mueller, Andrej Walilko, Arafat Ali
-# date              : Jan 27 2022
+# date              : Jan 31 2022
 # version           : 0.8.0
 # usage             : blcheck [options] <domain_or_ip>
 # reference         : http://multirbl.valli.org/list/
@@ -41,7 +41,7 @@ SCRIPT_PATH="$(dirname "$(readlink -f "$0")")"
 
 # Config {
 
-_APP_VERSION="0.8.0"
+_APP_VERSION="0.8.1"
 
 # where to log blocklist hits permanently
 OUTPUT="${SCRIPT_PATH}/bl_output.txt"
@@ -492,20 +492,19 @@ exit_script() {
 
   # unsetting variables ...
   unset REGEX_LIST REVERSED TARGET VERIFY_BL VERBOSE PLAIN \
-  RBL_SERVICE_COUNT YELLOW CLEAR RED GREEN SPINNER REGEX_IP REGEX_IPV6 REGEX_DOMAIN \
-  CMD_DIG DNSSERVER CONF_DNS_DURATION CONF_DNS_TRIES \
-  CMD_HOST CMD ALLOW_FILE FAILED_FILE PASSED_FILE INVALID_FILE
+    RBL_SERVICE_COUNT YELLOW CLEAR RED GREEN SPINNER REGEX_IP REGEX_IPV6 REGEX_DOMAIN \
+    CMD_DIG DNSSERVER CONF_DNS_DURATION CONF_DNS_TRIES \
+    CMD_HOST CMD ALLOW_FILE FAILED_FILE PASSED_FILE INVALID_FILE
 
   # Exit if FAILED_COUNT is perfectly set as integer and it is less or equal to 255 (max value of exit status)
   if [[ ${FAILED_COUNT} =~ ^[0-9]+$ && "${FAILED_COUNT}" -le 255 ]]; then
     exit "${FAILED_COUNT}"
   else
-  # or if FAILED_COUNT did not make it to the end then we exit 254 (following the same logic as error() function)
+    # or if FAILED_COUNT did not make it to the end then we exit 254 (following the same logic as error() function)
     exit 254
   fi
 
 }
-
 
 # Verbose printing
 info() {
@@ -775,7 +774,7 @@ If the IP is supplied, the PTR check cannot be executed and will be skipped.
 -l file|URL Load blocklists from file or URL, list can be separated by space or new line
 -c          Warn if the top level domain of the blocklist has expired
 -v          Verbose mode, can be used multiple times (up to -vvv)
--q          Quiet mode with absolutely no output (useful for scripts)
+-q,-s       Quiet mode with absolutely no output (useful for scripts)
 -p          Plain text output (no coloring, no interactive status)
 -o file     Specify path for writing the blocklist output file
 -j N or N%  Specify a number of threads or percentage of cpu cores to run as parallel
@@ -794,7 +793,7 @@ HELP
 RETVAL=1
 
 # Parse the params
-while getopts :vVqphcl:d:o:j:k arg; do
+while getopts :vVqsphcl:d:o:j:k arg; do
   case "${arg}" in
   d)
     DNSSERVER="${OPTARG}"
@@ -814,8 +813,6 @@ while getopts :vVqphcl:d:o:j:k arg; do
         curl -s -o "${SCRIPT_PATH}/online_rbl.txt" "${RBL_SERVICE_LIST}"
         check_status "$?"
         RBL_SERVICE_LIST="${SCRIPT_PATH}/online_rbl.txt"
-        # Remove carriage returns
-        sed -i 's/\r//g' "${RBL_SERVICE_LIST}"
         # If the file contain html tags, it's not a valid blocklist file
         if grep -qc "<" "${RBL_SERVICE_LIST}"; then
           # rm -f "${SCRIPT_PATH}/online_rbl.txt"
@@ -830,6 +827,8 @@ while getopts :vVqphcl:d:o:j:k arg; do
         error "File ${RBL_SERVICE_LIST} cannot be opened for reading, make sure it exists and that you have appropriate privileges"
       fi
     fi
+    # Remove carriage returns
+    sed -i 's/\r//g' "${RBL_SERVICE_LIST}"
     CONF_RBL_SERVICES=$(cat "${RBL_SERVICE_LIST}")
     ;;
   c) VERIFY_BL=TRUE ;;
@@ -838,7 +837,7 @@ while getopts :vVqphcl:d:o:j:k arg; do
     echo "${_APP_VERSION}"
     exit 0
     ;;
-  q) VERBOSE=-1 ;;
+  q|s) VERBOSE=-1 ;;
   p) PLAIN=TRUE RED="" GREEN="" YELLOW="" CLEAR="" ;;
   o)
     OUTPUT="${OPTARG}"
@@ -870,18 +869,17 @@ fi
 TARGET=$1
 
 # Custom actions
-if [[ "${TARGET}" == "get-script-path" ]]; then
+if [[ "${TARGET}" == "get-script-path" || "${TARGET}" == "script-path" ]]; then
   echo "${SCRIPT_PATH}"
   exit_status "$?"
-elif [[ "${TARGET}" == "script-path" ]]; then
-  echo "${SCRIPT_PATH}"
-  exit_status "$?"
-elif [[ "${TARGET}" == "show-output" ]]; then
-  nano -c "${OUTPUT}"
-  exit_status "$?"
-elif [[ "${TARGET}" == "output" ]]; then
-  nano -c "${OUTPUT}"
-  exit_status "$?"
+elif [[ "${TARGET}" == "show-output" || "${TARGET}" == "output" ]]; then
+  if command -v "nano" &>/dev/null; then
+    nano -c "${OUTPUT}"
+    exit_status "$?"
+  else
+    vi "${OUTPUT}"
+    exit_status "$?"
+  fi
 elif [[ "${TARGET}" == "version" ]]; then
   echo "v${_APP_VERSION}"
   exit_status "$?"
