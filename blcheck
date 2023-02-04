@@ -41,7 +41,7 @@ SCRIPT_PATH="$(dirname "$(readlink -f "$0")")"
 
 # Config {
 
-_APP_VERSION="0.8.1"
+_APP_VERSION="0.8.2"
 
 # where to log blocklist hits permanently
 OUTPUT="${SCRIPT_PATH}/bl_output.txt"
@@ -429,6 +429,7 @@ DNSSERVER=""
 RBL_SERVICE_LIST=""
 VERIFY_BL=""
 VERBOSE=0
+SCRIPTING=FALSE
 PLAIN=""
 USE_CACHE=FALSE
 
@@ -476,7 +477,6 @@ exit_script() {
   if [[ ${CTRL_C_COUNT} == 1 ]]; then
     local signal
     signal="$1"
-    echo ""
     if [ "${signal}" == "INT" ]; then
       echo "ERROR: This script has been terminated by ${USER} user with ${signal} signal."
     fi
@@ -774,7 +774,8 @@ If the IP is supplied, the PTR check cannot be executed and will be skipped.
 -l file|URL Load blocklists from file or URL, list can be separated by space or new line
 -c          Warn if the top level domain of the blocklist has expired
 -v          Verbose mode, can be used multiple times (up to -vvv)
--q,-s       Quiet mode with absolutely no output (useful for scripts)
+-q          Quiet mode with absolutely no output (useful for scripts)
+-s          Same like -q but it will printout a score of an IP at the end
 -p          Plain text output (no coloring, no interactive status)
 -o file     Specify path for writing the blocklist output file
 -j N or N%  Specify a number of threads or percentage of cpu cores to run as parallel
@@ -837,7 +838,8 @@ while getopts :vVqsphcl:d:o:j:k arg; do
     echo "${_APP_VERSION}"
     exit 0
     ;;
-  q|s) VERBOSE=-1 ;;
+  q) VERBOSE=-1 ;;
+  s) VERBOSE=-1 SCRIPTING=TRUE ;;
   p) PLAIN=TRUE RED="" GREEN="" YELLOW="" CLEAR="" ;;
   o)
     OUTPUT="${OPTARG}"
@@ -968,7 +970,11 @@ if [ "${USE_CACHE}" == "TRUE" ]; then
       date -d @"${LAST_SCAN_DATE}"
       echo "----------------------------------------------------------"
     fi
+
     info 0 "Info, run target scan without -k option to obtain new data"
+    if [[ "${SCRIPTING}" == "TRUE" ]]; then
+      echo "${BAD_SCORE}"
+    fi
     exit "${FAILED_COUNT}"
 
   fi
@@ -1221,6 +1227,10 @@ if [[ "${VERBOSE}" -ge 0 ]]; then
   fi
   echo "----------------------------------------------------------"
   info 2 "Output location: ${OUTPUT}"
+fi
+
+if [[ "${SCRIPTING}" == "TRUE" ]]; then
+  echo "${TARGET_BAD_SCORE}"
 fi
 
 exit "${FAILED_COUNT}"
